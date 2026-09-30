@@ -203,11 +203,20 @@ echo "==> install HTTPS proxy site ${SITE_NAME}"
 install_conf "$FULL_CONF"
 
 echo "==> smoke ${SITE_NAME}"
-code="$(curl -sS -o /dev/null -w '%{http_code}' --connect-timeout 10 --max-time 30 \
-  "https://${SITE_NAME}${SMOKE_PATH}" || echo fail)"
-echo "img_smoke_http_code=${code}"
+# Fresh LE certs can race curl's first verify; retry briefly.
+code="fail"
+for attempt in 1 2 3 4 5 6 7 8 9 10; do
+  code="$(curl -sS -o /dev/null -w '%{http_code}' --connect-timeout 10 --max-time 30 \
+    "https://${SITE_NAME}${SMOKE_PATH}" || echo fail)"
+  echo "img_smoke_http_code=${code} attempt=${attempt}"
+  if [[ "$code" == "200" ]]; then
+    break
+  fi
+  sleep 3
+done
 if [[ "$code" != "200" ]]; then
   echo "WARNING: ${SITE_NAME} smoke did not return 200" >&2
+  curl -v --connect-timeout 10 --max-time 30 -o /dev/null "https://${SITE_NAME}${SMOKE_PATH}" || true
   exit 1
 fi
 echo "OK: ${SITE_NAME} proxy ready"
