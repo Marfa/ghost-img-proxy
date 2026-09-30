@@ -8,14 +8,14 @@ SITE_NAME="img.themarfa.name"
 SITE_AVAILABLE="/etc/nginx/sites-available/${SITE_NAME}"
 SITE_ENABLED="/etc/nginx/sites-enabled/${SITE_NAME}"
 WEBROOT="/var/www/html"
-SNIP_GIMG="/etc/nginx/snippets/ghost-img-gimg.conf"
 REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 BOOTSTRAP="${REPO_DIR}/nginx/img.themarfa.name.bootstrap.conf"
 FULL_CONF="${REPO_DIR}/nginx/img.themarfa.name.conf"
 GIMG_CONF="${REPO_DIR}/nginx/feeds-gimg.conf"
 SMOKE_PATH="/c/71/cf/71cf070c-b8aa-467e-9efd-cf18f7dcf253/content/images/size/w30/2018/01/DSC_0094-3-.jpg"
 VPS_IP="152.114.195.134"
-INCLUDE_LINE='    include /etc/nginx/snippets/ghost-img-gimg.conf;'
+MARKER_BEGIN="# ghost-img-proxy:gimg:begin"
+MARKER_END="# ghost-img-proxy:gimg:end"
 
 if [[ "$(id -u)" -ne 0 ]]; then
   echo "ERROR: run as root" >&2
@@ -26,12 +26,9 @@ command -v nginx >/dev/null
 command -v curl >/dev/null
 command -v python3 >/dev/null
 
-mkdir -p "$WEBROOT" /etc/nginx/sites-available /etc/nginx/sites-enabled /etc/nginx/snippets
+mkdir -p "$WEBROOT" /etc/nginx/sites-available /etc/nginx/sites-enabled
 
-echo "==> install feeds /gimg snippet"
-cp -a "$GIMG_CONF" "$SNIP_GIMG"
-
-restore_freshrss_if_broken() {
+restore_if_broken() {
   local conf="$1"
   if nginx -t 2>/dev/null; then
     return 0
@@ -44,89 +41,96 @@ restore_freshrss_if_broken() {
   fi
 }
 
-include_gimg_in_feeds() {
-  local conf=""
+find_feeds_conf() {
   local f
-  for f in /etc/nginx/sites-enabled/* /etc/nginx/conf.d/*.conf; do
+  for f in /etc/nginx/sites-enabled/* /etc/nginx/sites-available/* /etc/nginx/conf.d/*.conf; do
     [[ -f "$f" ]] || continue
-    if grep -q 'server_name.*feeds\.themarfa\.name' "$f" 2>/dev/null; then
-      conf="$f"
-      break
+    if grep -qE 'server_name[[:space:]].*feeds\.themarfa\.name' "$f" 2>/dev/null; then
+      printf '%s\n' "$f"
+      return 0
     fi
   done
-  if [[ -z "$conf" ]]; then
-    echo "WARNING: no nginx site with server_name feeds.themarfa.name found" >&2
-    return 1
-  fi
-
-  if grep -q 'ghost-img-gimg.conf' "$conf"; then
-    echo "gimg already included in $conf"
-    return 0
-  fi
-
-  cp -a "$conf" "${conf}.bak.$(date +%s)"
-  python3 - "$conf" "$INCLUDE_LINE" <<'PY'
-import pathlib, sys
-path = pathlib.Path(sys.argv[1])
-include_line = sys.argv[2]
-text = path.read_text(encoding="utf-8")
-lines = text.splitlines(keepends=True)
-
-# Find SSL server block that mentions feeds.themarfa.name, insert include
-# once before its closing brace.
-in_server = False
-depth = 0
-feeds_server = False
-inserted = False
-out = []
-for line in lines:
-    stripped = line.strip()
-    if not in_server and stripped.startswith("server"):
-        in_server = True
-        depth = 0
-        feeds_server = False
-    if in_server:
-        depth += line.count("{") - line.count("}")
-        if "server_name" in line and "feeds.themarfa.name" in line:
-            feeds_server = True
-        if feeds_server and depth == 0 and stripped == "}" and not inserted:
-            out.append(include_line + "\n")
-            inserted = True
-            in_server = False
-            out.append(line)
-            continue
-        if depth == 0 and stripped == "}":
-            in_server = False
-    out.append(line)
-
-if not inserted:
-    sys.exit("could not find feeds.themarfa.name server block to patch")
-path.write_text("".join(out), encoding="utf-8")
-print(f"included gimg in {path}")
-PY
-
-  if ! nginx -t; then
-    restore_freshrss_if_broken "$conf"
-    nginx -t
-    echo "ERROR: failed to include gimg safely" >&2
-    return 1
-  fi
+  return 1
 }
 
-# If a previous broken patch exists, restore newest bak before retrying.
-for f in /etc/nginx/sites-enabled/freshrss /etc/nginx/sites-enabled/*; do
-  [[ -f "$f" ]] || continue
-  if grep -q 'server_name.*feeds\.themarfa\.name' "$f" 2>/dev/null; then
-    if ! nginx -t 2>/dev/null; then
-      restore_freshrss_if_broken "$f"
-    fi
-    break
-  fi
-done
+echo "==> patch feeds.themarfa.name with /gimg/ location"
+FEEDS_CONF="$(find_feeds_conf || true)"
+if [[ -z "${FEEDS_CONF}" ]]; then
+  echo "ERROR: no nginx site with server_name feeds.themarfa.name found" >&2
+  exit 1
+fi
+echo "feeds conf: ${FEEDS_CONF}"
 
-include_gimg_in_feeds
-
+# Ensure we start from a working config (undo earlier broken patches).
+if ! nginx -t 2>/dev/null; then
+  restore_if_broken "$FEEDS_CONF"
+fi
+# Drop any previous marker block / stray includes from earlier attempts.
+python3 - "$FEEDS_CONF" <<'PY'
+from pathlib import Path
+import re, sys
+path = Path(sys.argv[1])
+text = path.read_text(encoding="utf-8")
+text2 = re.sub(
+    r"\n?# ghost-img-proxy:gimg:begin.*?# ghost-img-proxy:gimg:end\n?",
+    "\n",
+    text,
+    flags=re.S,
+)
+text2 = re.sub(
+    r"\n?\s*include /etc/nginx/snippets/ghost-img-gimg\.conf;\n?",
+    "\n",
+    text2,
+)
+if text2 != text:
+    path.write_text(text2, encoding="utf-8")
+    print("stripped previous ghost-img-proxy fragments")
+PY
+restore_if_broken "$FEEDS_CONF"
 nginx -t
+
+if grep -q 'ghost-img-proxy:gimg:begin' "$FEEDS_CONF"; then
+  echo "gimg location already present"
+else
+  cp -a "$FEEDS_CONF" "${FEEDS_CONF}.bak.$(date +%s)"
+  python3 - "$FEEDS_CONF" "$GIMG_CONF" "$MARKER_BEGIN" "$MARKER_END" <<'PY'
+from pathlib import Path
+import sys
+conf_path = Path(sys.argv[1])
+gimg_path = Path(sys.argv[2])
+begin, end = sys.argv[3], sys.argv[4]
+block = gimg_path.read_text(encoding="utf-8").strip() + "\n"
+# Keep only the location stanza (drop comment header lines already in file)
+lines = conf_path.read_text(encoding="utf-8").splitlines(keepends=True)
+out = []
+inserted = False
+for line in lines:
+    out.append(line)
+    if (
+        not inserted
+        and "server_name" in line
+        and "feeds.themarfa.name" in line
+        and not line.strip().startswith("#")
+    ):
+        out.append(f"\n    {begin}\n")
+        for bl in block.splitlines():
+            out.append(("    " + bl if bl.strip() else bl) + "\n")
+        out.append(f"    {end}\n\n")
+        inserted = True
+if not inserted:
+    raise SystemExit("could not find server_name feeds.themarfa.name line")
+conf_path.write_text("".join(out), encoding="utf-8")
+print(f"inserted /gimg/ location into {conf_path}")
+PY
+fi
+
+if ! nginx -t; then
+  restore_if_broken "$FEEDS_CONF"
+  nginx -t
+  echo "ERROR: feeds patch failed nginx -t" >&2
+  exit 1
+fi
+
 systemctl reload nginx
 
 echo "==> smoke feeds /gimg"
