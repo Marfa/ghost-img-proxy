@@ -102,15 +102,14 @@ conf_path = Path(sys.argv[1])
 gimg_path = Path(sys.argv[2])
 begin, end = sys.argv[3], sys.argv[4]
 block = gimg_path.read_text(encoding="utf-8").strip() + "\n"
-# Keep only the location stanza (drop comment header lines already in file)
 lines = conf_path.read_text(encoding="utf-8").splitlines(keepends=True)
 out = []
-inserted = False
+inserted = 0
 for line in lines:
     out.append(line)
+    # Patch EVERY feeds.themarfa.name server_name (HTTP + HTTPS vhosts).
     if (
-        not inserted
-        and "server_name" in line
+        "server_name" in line
         and "feeds.themarfa.name" in line
         and not line.strip().startswith("#")
     ):
@@ -118,11 +117,11 @@ for line in lines:
         for bl in block.splitlines():
             out.append(("    " + bl if bl.strip() else bl) + "\n")
         out.append(f"    {end}\n\n")
-        inserted = True
-if not inserted:
+        inserted += 1
+if inserted == 0:
     raise SystemExit("could not find server_name feeds.themarfa.name line")
 conf_path.write_text("".join(out), encoding="utf-8")
-print(f"inserted /gimg/ location into {conf_path}")
+print(f"inserted /gimg/ into {inserted} server_name block(s) in {conf_path}")
 PY
 fi
 
