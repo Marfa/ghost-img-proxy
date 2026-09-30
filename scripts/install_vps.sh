@@ -92,7 +92,9 @@ nginx -t
 if grep -q 'ghost-img-proxy:gimg:begin' "$FEEDS_CONF"; then
   echo "gimg location already present"
 else
-  cp -a "$FEEDS_CONF" "${FEEDS_CONF}.bak.$(date +%s)"
+  # Keep backups outside sites-enabled — nginx include globs would load *.bak.*
+  mkdir -p /root/nginx-site-backups
+  cp -a "$FEEDS_CONF" "/root/nginx-site-backups/$(basename "$FEEDS_CONF").bak.$(date +%s)"
   python3 - "$FEEDS_CONF" "$GIMG_CONF" "$MARKER_BEGIN" "$MARKER_END" <<'PY'
 from pathlib import Path
 import sys
