@@ -1,16 +1,11 @@
-﻿# ghost-img-proxy
+# ghost-img-proxy
 
 Failover proxy for Ghost(Pro) CDN images blocked on some networks (`storage.ghost.io` → `ERR_CONNECTION_RESET`).
 
-## Live
-
-| Endpoint | Role |
-|----------|------|
-| `https://feeds.themarfa.name/gimg/...` | Path-mirrored proxy on the HostKey VPS |
-| `https://img.themarfa.name/...` | Dedicated host (same VPS; DNS A → same target as `bot.themarfa.name`, DNS-only) |
-| Theme script / inline failover | Browsers try CDN first, then proxy on error |
-
-Default: browsers still load `storage.ghost.io`. On `error`, JS rewrites to the proxy.
+- Public host: `https://img.themarfa.name`
+- Upstream: `https://storage.ghost.io` (path-mirrored)
+- Default: browsers still load `storage.ghost.io`
+- On image `error`: Site Footer JS rewrites to this proxy for the rest of the tab
 
 Same HostKey VPS / nginx pattern as `bot.themarfa.name`, `feeds.themarfa.name`, `ghost-translator.themarfa.name`.
 
@@ -18,41 +13,43 @@ Same HostKey VPS / nginx pattern as `bot.themarfa.name`, `feeds.themarfa.name`, 
 
 | Path | Purpose |
 |------|---------|
-| `nginx/feeds-gimg.conf` | `/gimg/` location for feeds.themarfa.name |
-| `nginx/img.themarfa.name.conf` | Dedicated HTTPS site |
-| `nginx/img.themarfa.name.bootstrap.conf` | HTTP ACME bootstrap |
-| `fallback.js` | Browser failover |
+| `nginx/img.themarfa.name.conf` | Production HTTPS nginx site |
+| `nginx/img.themarfa.name.bootstrap.conf` | HTTP-only ACME bootstrap |
+| `fallback.js` | Ghost Code Injection (Site Footer) |
 | `scripts/install_vps.sh` | Root install on VPS |
-| `scripts/cf_dns_img.py` | Cloudflare A record (DNS-only; IP from `bot.themarfa.name` / `VPS_PUBLIC_IPV4`) |
+| `scripts/cf_dns_img.py` | Cloudflare A record (DNS-only) |
+| `scripts/inject_ghost_footer.py` | Push `fallback.js` into Ghost Admin settings |
 
-## DNS (img.themarfa.name)
-
-Cloudflare → themarfa.name → Add record:
-
-- Type **A**, Name **img**, IPv4 = same as `bot.themarfa.name`, Proxy **DNS only** (grey cloud)
-
-Or with a valid API token (Zone DNS Edit):
+## DNS
 
 ```bash
-export CLOUDFLARE_API_KEY=...
-# optional: export VPS_PUBLIC_IPV4=...   # otherwise resolved from bot.themarfa.name
+# needs CLOUDFLARE_API_KEY (API token) in env or ../ghost_translator_repo/.env
 python scripts/cf_dns_img.py
 ```
+
+Creates `img.themarfa.name` A `152.114.195.134`, **proxied=false**.
 
 ## VPS install
 
 ```bash
+# on VPS as root, with this directory available:
 bash scripts/install_vps.sh
 ```
 
-Via GitHub Actions: `Marfa/ghost_translator` → **Install ghost-img-proxy** (secrets `VPS_HOST`, `VPS_USER`, `VPS_SSH_KEY`).
+Or via GitHub Actions SSH (secrets `VPS_HOST`, `VPS_USER`, `VPS_SSH_KEY`) — see workflow in deploy notes.
 
-Smoke:
+Smoke path:
 
-```text
-https://feeds.themarfa.name/gimg/c/71/cf/.../content/images/...
-https://img.themarfa.name/c/71/cf/.../content/images/...
+`https://img.themarfa.name/c/71/cf/71cf070c-b8aa-467e-9efd-cf18f7dcf253/content/images/size/w30/2018/01/DSC_0094-3-.jpg`
+
+## Ghost Code Injection
+
+```bash
+# SOURCE_GHOST_URL + SOURCE_GHOST_ADMIN_API_KEY from sibling .env
+python scripts/inject_ghost_footer.py
 ```
+
+Or paste `fallback.js` manually: Ghost Admin → Settings → Code injection → Site Footer.
 
 ## Author
 
