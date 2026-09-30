@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Install/update Ghost image CDN failover proxy on the HostKey VPS.
-# 1) Always enables https://feeds.themarfa.name/gimg/... (existing TLS)
+# 1) Enables https://feeds.themarfa.name/gimg/... inside the existing FreshRSS vhost
 # 2) If img.themarfa.name DNS points here, issues cert and enables dedicated vhost
 set -euo pipefail
 
@@ -15,6 +15,7 @@ FULL_CONF="${REPO_DIR}/nginx/img.themarfa.name.conf"
 GIMG_CONF="${REPO_DIR}/nginx/feeds-gimg.conf"
 SMOKE_PATH="/c/71/cf/71cf070c-b8aa-467e-9efd-cf18f7dcf253/content/images/size/w30/2018/01/DSC_0094-3-.jpg"
 VPS_IP="152.114.195.134"
+INCLUDE_LINE='    include /etc/nginx/snippets/ghost-img-gimg.conf;'
 
 if [[ "$(id -u)" -ne 0 ]]; then
   echo "ERROR: run as root" >&2
@@ -23,44 +24,107 @@ fi
 
 command -v nginx >/dev/null
 command -v curl >/dev/null
+command -v python3 >/dev/null
 
 mkdir -p "$WEBROOT" /etc/nginx/sites-available /etc/nginx/sites-enabled /etc/nginx/snippets
 
 echo "==> install feeds /gimg snippet"
 cp -a "$GIMG_CONF" "$SNIP_GIMG"
 
-# Ensure feeds (or any site that serves feeds.themarfa.name) includes the snippet once.
-include_gimg_in_feeds() {
-  local conf
-  for conf in /etc/nginx/sites-enabled/* /etc/nginx/conf.d/*.conf; do
-    [[ -f "$conf" ]] || continue
-    if grep -q 'server_name.*feeds\.themarfa\.name' "$conf" 2>/dev/null; then
-      if grep -q 'ghost-img-gimg.conf' "$conf"; then
-        echo "gimg already included in $conf"
-      else
-        # Insert include inside the first server block that mentions feeds.
-        cp -a "$conf" "${conf}.bak.$(date +%s)"
-        awk '
-          BEGIN { done=0 }
-          /server_name/ && /feeds\.themarfa\.name/ && done==0 {
-            print
-            print "    include /etc/nginx/snippets/ghost-img-gimg.conf;"
-            done=1
-            next
-          }
-          { print }
-        ' "$conf" > "${conf}.new"
-        mv "${conf}.new" "$conf"
-        echo "included gimg in $conf"
-      fi
-      return 0
-    fi
-  done
-  echo "WARNING: no nginx site with server_name feeds.themarfa.name found" >&2
-  return 1
+restore_freshrss_if_broken() {
+  local conf="$1"
+  if nginx -t 2>/dev/null; then
+    return 0
+  fi
+  local bak
+  bak="$(ls -1t "${conf}.bak."* 2>/dev/null | head -n1 || true)"
+  if [[ -n "$bak" ]]; then
+    echo "nginx -t failed; restoring $bak"
+    cp -a "$bak" "$conf"
+  fi
 }
 
-include_gimg_in_feeds || true
+include_gimg_in_feeds() {
+  local conf=""
+  local f
+  for f in /etc/nginx/sites-enabled/* /etc/nginx/conf.d/*.conf; do
+    [[ -f "$f" ]] || continue
+    if grep -q 'server_name.*feeds\.themarfa\.name' "$f" 2>/dev/null; then
+      conf="$f"
+      break
+    fi
+  done
+  if [[ -z "$conf" ]]; then
+    echo "WARNING: no nginx site with server_name feeds.themarfa.name found" >&2
+    return 1
+  fi
+
+  if grep -q 'ghost-img-gimg.conf' "$conf"; then
+    echo "gimg already included in $conf"
+    return 0
+  fi
+
+  cp -a "$conf" "${conf}.bak.$(date +%s)"
+  python3 - "$conf" "$INCLUDE_LINE" <<'PY'
+import pathlib, sys
+path = pathlib.Path(sys.argv[1])
+include_line = sys.argv[2]
+text = path.read_text(encoding="utf-8")
+lines = text.splitlines(keepends=True)
+
+# Find SSL server block that mentions feeds.themarfa.name, insert include
+# once before its closing brace.
+in_server = False
+depth = 0
+feeds_server = False
+inserted = False
+out = []
+for line in lines:
+    stripped = line.strip()
+    if not in_server and stripped.startswith("server"):
+        in_server = True
+        depth = 0
+        feeds_server = False
+    if in_server:
+        depth += line.count("{") - line.count("}")
+        if "server_name" in line and "feeds.themarfa.name" in line:
+            feeds_server = True
+        if feeds_server and depth == 0 and stripped == "}" and not inserted:
+            out.append(include_line + "\n")
+            inserted = True
+            in_server = False
+            out.append(line)
+            continue
+        if depth == 0 and stripped == "}":
+            in_server = False
+    out.append(line)
+
+if not inserted:
+    sys.exit("could not find feeds.themarfa.name server block to patch")
+path.write_text("".join(out), encoding="utf-8")
+print(f"included gimg in {path}")
+PY
+
+  if ! nginx -t; then
+    restore_freshrss_if_broken "$conf"
+    nginx -t
+    echo "ERROR: failed to include gimg safely" >&2
+    return 1
+  fi
+}
+
+# If a previous broken patch exists, restore newest bak before retrying.
+for f in /etc/nginx/sites-enabled/freshrss /etc/nginx/sites-enabled/*; do
+  [[ -f "$f" ]] || continue
+  if grep -q 'server_name.*feeds\.themarfa\.name' "$f" 2>/dev/null; then
+    if ! nginx -t 2>/dev/null; then
+      restore_freshrss_if_broken "$f"
+    fi
+    break
+  fi
+done
+
+include_gimg_in_feeds
 
 nginx -t
 systemctl reload nginx
