@@ -1,12 +1,12 @@
 /**
- * Ghost CDN image failover: try storage.ghost.io first; on error use img.themarfa.name,
- * then feeds.themarfa.name/gimg if the dedicated host is unreachable.
+ * Ghost CDN image failover: try storage.ghost.io first; on error use
+ * feeds.themarfa.name/gimg (live VPS path), then img.themarfa.name when DNS exists.
  * Paste into Ghost Admin → Settings → Code injection → Site Footer.
  */
 (function () {
   var ORIGIN = "https://storage.ghost.io";
-  var PROXY = "https://img.themarfa.name";
-  var PROXY_FALLBACK = "https://feeds.themarfa.name/gimg";
+  var PROXY = "https://feeds.themarfa.name/gimg";
+  var PROXY_FALLBACK = "https://img.themarfa.name";
   var FLAG = "ghostImgProxyBase";
   var ATTR = "data-ghost-img-proxy";
 
