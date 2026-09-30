@@ -13,7 +13,15 @@ BOOTSTRAP="${REPO_DIR}/nginx/img.themarfa.name.bootstrap.conf"
 FULL_CONF="${REPO_DIR}/nginx/img.themarfa.name.conf"
 GIMG_CONF="${REPO_DIR}/nginx/feeds-gimg.conf"
 SMOKE_PATH="/c/71/cf/71cf070c-b8aa-467e-9efd-cf18f7dcf253/content/images/size/w30/2018/01/DSC_0094-3-.jpg"
-VPS_IP="152.114.195.134"
+# Never commit a literal VPS address — resolve the live HostKey box via bot anchor hostname.
+VPS_IP="$(getent ahostsv4 bot.themarfa.name 2>/dev/null | awk '{print $1; exit}' || true)"
+if [[ -z "${VPS_IP}" ]]; then
+  VPS_IP="$(dig +short bot.themarfa.name A 2>/dev/null | head -n1 || true)"
+fi
+if [[ -z "${VPS_IP}" ]]; then
+  echo "ERROR: could not resolve bot.themarfa.name to an IPv4 address" >&2
+  exit 1
+fi
 MARKER_BEGIN="# ghost-img-proxy:gimg:begin"
 MARKER_END="# ghost-img-proxy:gimg:end"
 
@@ -135,9 +143,16 @@ fi
 systemctl reload nginx
 
 echo "==> smoke feeds /gimg"
-gimg_code="$(curl -sS -o /dev/null -w '%{http_code}' --connect-timeout 10 --max-time 30 \
-  "https://feeds.themarfa.name/gimg${SMOKE_PATH}" || echo fail)"
-echo "feeds_gimg_http_code=${gimg_code}"
+gimg_code="fail"
+for attempt in 1 2 3 4 5; do
+  gimg_code="$(curl -sS -o /dev/null -w '%{http_code}' --connect-timeout 10 --max-time 30 \
+    "https://feeds.themarfa.name/gimg${SMOKE_PATH}" || echo fail)"
+  echo "feeds_gimg_http_code=${gimg_code} attempt=${attempt}"
+  if [[ "$gimg_code" == "200" ]]; then
+    break
+  fi
+  sleep 2
+done
 if [[ "$gimg_code" != "200" ]]; then
   echo "ERROR: feeds /gimg smoke failed" >&2
   exit 1
