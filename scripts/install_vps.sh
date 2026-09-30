@@ -13,7 +13,8 @@ BOOTSTRAP="${REPO_DIR}/nginx/img.themarfa.name.bootstrap.conf"
 FULL_CONF="${REPO_DIR}/nginx/img.themarfa.name.conf"
 GIMG_CONF="${REPO_DIR}/nginx/feeds-gimg.conf"
 SMOKE_PATH="/c/71/cf/71cf070c-b8aa-467e-9efd-cf18f7dcf253/content/images/size/w30/2018/01/DSC_0094-3-.jpg"
-VPS_IP="152.114.195.134"
+# Same HostKey box as other themarfa services (no hardcoded public IP in git).
+ANCHOR_HOST="${ANCHOR_HOST:-bot.themarfa.name}"
 MARKER_BEGIN="# ghost-img-proxy:gimg:begin"
 MARKER_END="# ghost-img-proxy:gimg:end"
 
@@ -144,10 +145,11 @@ if [[ "$gimg_code" != "200" ]]; then
 fi
 
 resolved="$(getent ahostsv4 "$SITE_NAME" 2>/dev/null | awk '{print $1; exit}' || true)"
-echo "img DNS resolves to: ${resolved:-<none>}"
+anchor_ip="$(getent ahostsv4 "$ANCHOR_HOST" 2>/dev/null | awk '{print $1; exit}' || true)"
+echo "img DNS resolves to: ${resolved:-<none>} (anchor ${ANCHOR_HOST}=${anchor_ip:-<none>})"
 
-if [[ "$resolved" != "$VPS_IP" ]]; then
-  echo "NOTE: ${SITE_NAME} does not point to ${VPS_IP} yet — skipping dedicated vhost/certbot"
+if [[ -z "$resolved" || -z "$anchor_ip" || "$resolved" != "$anchor_ip" ]]; then
+  echo "NOTE: ${SITE_NAME} does not resolve to the same host as ${ANCHOR_HOST} yet — skipping dedicated vhost/certbot"
   echo "OK: interim proxy ready at https://feeds.themarfa.name/gimg/..."
   exit 0
 fi

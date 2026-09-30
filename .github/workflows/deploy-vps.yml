@@ -12,11 +12,6 @@ on:
         required: false
         type: boolean
         default: false
-      skip_certbot:
-        description: "Skip certbot (HTTP-only bootstrap)"
-        required: false
-        type: boolean
-        default: false
 
 permissions: {}
 
@@ -38,7 +33,7 @@ jobs:
         run: |
           set -euo pipefail
           if [[ -z "${CLOUDFLARE_API_KEY}" ]]; then
-            echo "No cloudflare_api_token input — skipping DNS (ensure A 152.114.195.134 exists, proxied off)"
+            echo "No cloudflare_api_token input — skipping DNS (ensure img A matches bot.themarfa.name, proxied off)"
             exit 0
           fi
           pip install -q python-dotenv
@@ -51,13 +46,11 @@ jobs:
           username: ${{ secrets.VPS_USER }}
           key: ${{ secrets.VPS_SSH_KEY }}
           port: 22
-          script_stop: true
           command_timeout: 15m
           script: |
             set -euo pipefail
             APP=/opt/ghost-img-proxy
             mkdir -p "$APP"
-            # sync from a fresh clone if possible; else we stream files next
             if [[ -d "$APP/.git" ]]; then
               cd "$APP"
               git fetch --prune origin
@@ -68,13 +61,17 @@ jobs:
             fi
             bash scripts/install_vps.sh
 
-      - name: Smoke from runner
+      - name: Public smoke
         run: |
           set -euo pipefail
           sleep 3
-          curl -fsS https://img.themarfa.name/health
-          echo
           code=$(curl -sS -o /dev/null -w '%{http_code}' --connect-timeout 15 --max-time 45 \
-            'https://img.themarfa.name/c/71/cf/71cf070c-b8aa-467e-9efd-cf18f7dcf253/content/images/size/w30/2018/01/DSC_0094-3-.jpg')
-          echo "smoke_http_code=$code"
+            'https://feeds.themarfa.name/gimg/c/71/cf/71cf070c-b8aa-467e-9efd-cf18f7dcf253/content/images/size/w30/2018/01/DSC_0094-3-.jpg' || echo fail)
+          echo "feeds_gimg_http_code=$code"
           test "$code" = "200"
+          curl -fsS https://img.themarfa.name/health || true
+          echo
+          img_code=$(curl -sS -o /dev/null -w '%{http_code}' --connect-timeout 15 --max-time 45 \
+            'https://img.themarfa.name/c/71/cf/71cf070c-b8aa-467e-9efd-cf18f7dcf253/content/images/size/w30/2018/01/DSC_0094-3-.jpg' || echo fail)
+          echo "img_http_code=$img_code"
+          test "$img_code" = "200"

@@ -1,9 +1,13 @@
 #!/usr/bin/env python3
-"""Create/update Cloudflare A record for img.themarfa.name (DNS-only)."""
+"""Create/update Cloudflare A record for img.themarfa.name (DNS-only).
+
+Target IPv4 is taken from ANCHOR_HOST (default bot.themarfa.name), never hardcoded.
+"""
 from __future__ import annotations
 
 import json
 import os
+import socket
 import sys
 import urllib.error
 import urllib.request
@@ -13,7 +17,7 @@ from dotenv import dotenv_values
 
 ZONE_NAME = "themarfa.name"
 RECORD_NAME = "img"
-CONTENT = "152.114.195.134"
+ANCHOR_HOST = os.environ.get("ANCHOR_HOST", "bot.themarfa.name")
 TTL = 300
 
 
@@ -32,6 +36,13 @@ def load_token() -> str:
             if token:
                 return token
     raise SystemExit("CLOUDFLARE_API_KEY not found in env or sibling .env")
+
+
+def resolve_ipv4(host: str) -> str:
+    infos = socket.getaddrinfo(host, None, socket.AF_INET, socket.SOCK_STREAM)
+    if not infos:
+        raise SystemExit(f"no A record for {host}")
+    return infos[0][4][0]
 
 
 def cf(token: str, method: str, path: str, body: dict | None = None) -> dict:
@@ -55,6 +66,7 @@ def cf(token: str, method: str, path: str, body: dict | None = None) -> dict:
 
 def main() -> int:
     token = load_token()
+    content = os.environ.get("VPS_PUBLIC_IPV4") or resolve_ipv4(ANCHOR_HOST)
     zones = cf(token, "GET", f"/zones?name={ZONE_NAME}")
     if not zones.get("success") or not zones.get("result"):
         raise SystemExit(f"zone lookup failed: {zones}")
@@ -67,7 +79,7 @@ def main() -> int:
     payload = {
         "type": "A",
         "name": RECORD_NAME,
-        "content": CONTENT,
+        "content": content,
         "ttl": TTL,
         "proxied": False,
         "comment": "Ghost storage.ghost.io image failover proxy",
